@@ -1,12 +1,5 @@
-import yt_dlp
-import os
-import re
-import sys
-import glob
-import json
-import requests
-import subprocess
-import shutil
+import yt_dlp, os, re, sys, glob, json, time, random, logging, requests, subprocess, shutil
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,11 +7,20 @@ load_dotenv()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MAX_COMENTARIOS = int(os.getenv("MAX_COMENTARIOS", 100))
 INTERVALO_FRAMES = int(os.getenv("INTERVALO_FRAMES", 30))
+DELAY_MIN = int(os.getenv("DELAY_MIN", 10))
+DELAY_MAX = int(os.getenv("DELAY_MAX", 20))
 COOKIE_FILE = os.path.join(BASE_DIR, "cookies_runtime.txt")
 COOKIE_SOURCE = os.path.join(BASE_DIR, "cookies.txt")
 
-# Tenta importar whisper (fallback para transcrição)
+LOG_FILE = os.path.join(BASE_DIR, "execucao.log")
+logger = logging.getLogger("OmniExtractor")
+logger.setLevel(logging.DEBUG)
+fmt = logging.Formatter("[%(asctime)s] %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+fh = logging.FileHandler(LOG_FILE, encoding="utf-8"); fh.setLevel(logging.DEBUG); fh.setFormatter(fmt); logger.addHandler(fh)
+ch = logging.StreamHandler(sys.stdout); ch.setLevel(logging.INFO); ch.setFormatter(fmt); logger.addHandler(ch)
+
 WHISPER_DISPONIVEL = False
+WHISPER_MODELO = None
 try:
     import whisper
     WHISPER_DISPONIVEL = True
@@ -26,482 +28,420 @@ except ImportError:
     pass
 
 
+def carregar_whisper():
+    global WHISPER_MODELO
+    if not WHISPER_DISPONIVEL: return None
+    if WHISPER_MODELO is None:
+        logger.info("Carregando modelo Whisper (base) — apenas uma vez...")
+        try: WHISPER_MODELO = whisper.load_model("base"); logger.info("Whisper carregado.")
+        except Exception as e: logger.error(f"Falha Whisper: {e}"); return None
+    return WHISPER_MODELO
+
+def delay_seguro(ctx="requisição"):
+    t = random.uniform(DELAY_MIN, DELAY_MAX)
+    logger.debug(f"Aguardando {t:.1f}s antes da próxima {ctx}...")
+    time.sleep(t)
+
 def limpar_nome(nome):
     nome = re.sub(r'[\\/*?:"<>|]', "", nome).strip()
     return nome[:150] if len(nome) > 150 else nome
 
-
 def preparar_cookies():
-    if not os.path.exists(COOKIE_SOURCE):
-        return
+    if not os.path.exists(COOKIE_SOURCE): return
     try:
-        if os.path.exists(COOKIE_FILE):
-            os.remove(COOKIE_FILE)
-    except OSError:
-        pass
-    with open(COOKIE_SOURCE, "r", encoding="utf-8") as src:
-        conteudo = src.read()
-    with open(COOKIE_FILE, "w", encoding="utf-8") as dst:
-        dst.write(conteudo)
-
+        if os.path.exists(COOKIE_FILE): os.remove(COOKIE_FILE)
+    except OSError: pass
+    with open(COOKIE_SOURCE, "r", encoding="utf-8") as s: c = s.read()
+    with open(COOKIE_FILE, "w", encoding="utf-8") as d: d.write(c)
 
 def verificar_dependencias():
-    ok = True
-    if not shutil.which("ffmpeg"):
-        print("[AVISO] ffmpeg não encontrado no PATH. Frames e Whisper podem falhar.")
-    else:
-        print("[OK] ffmpeg encontrado.")
-    if not WHISPER_DISPONIVEL:
-        print("[AVISO] Whisper não instalado. Transcrição usará apenas legendas do YouTube.")
-        print("        Para instalar: pip install openai-whisper")
-    else:
-        print("[OK] Whisper disponível (fallback de transcrição).")
-    return ok
-
+    if not shutil.which("ffmpeg"): logger.warning("ffmpeg não encontrado no PATH.")
+    else: logger.info("[OK] ffmpeg encontrado.")
+    if not WHISPER_DISPONIVEL: logger.warning("Whisper não instalado. pip install openai-whisper")
+    else: logger.info("[OK] Whisper disponível.")
 
 def baixar_thumb(v_id, destino):
     for res in ["maxresdefault", "sddefault", "hqdefault", "mqdefault", "default"]:
-        url = f"https://img.youtube.com/vi/{v_id}/{res}.jpg"
         try:
-            r = requests.get(url, timeout=15)
+            r = requests.get(f"https://img.youtube.com/vi/{v_id}/{res}.jpg", timeout=15)
             if r.status_code == 200 and len(r.content) > 1000:
-                with open(destino, "wb") as f:
-                    f.write(r.content)
+                with open(destino, "wb") as f: f.write(r.content)
                 return True
-        except Exception:
-            pass
+        except Exception: pass
     return False
 
-
 def limpar_vtt_para_txt(caminho_vtt):
-    """Converte VTT para texto limpo e retorna o texto."""
     try:
-        with open(caminho_vtt, "r", encoding="utf-8") as f:
-            linhas = f.readlines()
+        with open(caminho_vtt, "r", encoding="utf-8") as f: linhas = f.readlines()
         texto = []
         for ln in linhas:
             ln = ln.strip()
-            if ("WEBVTT" in ln or "Kind:" in ln or "Language:" in ln
-                    or "-->" in ln or not ln or ln.isdigit()
-                    or re.match(r"^\d{2}:\d{2}", ln)):
-                continue
+            if ("WEBVTT" in ln or "Kind:" in ln or "Language:" in ln or "-->" in ln or not ln or ln.isdigit() or re.match(r"^\d{2}:\d{2}", ln)): continue
             ln = re.sub(r"<[^>]+>", "", ln)
-            if not texto or ln != texto[-1]:
-                texto.append(ln)
+            if not texto or ln != texto[-1]: texto.append(ln)
         return " ".join(texto)
-    except Exception:
-        return ""
-
+    except Exception: return ""
 
 def transcrever_com_whisper(caminho_audio):
-    """Transcreve áudio usando Whisper (modelo base)."""
-    if not WHISPER_DISPONIVEL:
-        return None
+    modelo = carregar_whisper()
+    if modelo is None: return None
     try:
-        print("      Carregando Whisper (modelo base)...")
-        modelo = whisper.load_model("base")
-        resultado = modelo.transcribe(caminho_audio, language=None)
-        return resultado.get("text", "")
-    except Exception as e:
-        print(f"      [Erro Whisper] {e}")
-        return None
-
-
-def obter_ydl_opts_base():
-    opts = {
-        "extract_flat": True,
-        "quiet": True,
-        "ignoreerrors": True,
-        "paths": {"home": BASE_DIR},
-    }
-    if os.path.exists(COOKIE_FILE):
-        opts["cookiefile"] = COOKIE_FILE
-    # Adiciona ejs se disponível
-    try:
-        import yt_dlp_ejs
-        opts["remote_components"] = ["ejs:github"]
-    except ImportError:
-        pass
-    return opts
-
+        logger.info("      Transcrevendo com Whisper...")
+        return modelo.transcribe(caminho_audio, language=None).get("text", "")
+    except Exception as e: logger.error(f"      [Erro Whisper] {e}"); return None
 
 def adicionar_extras_ydl(opts):
-    if os.path.exists(COOKIE_FILE):
-        opts["cookiefile"] = COOKIE_FILE
-    try:
-        import yt_dlp_ejs
-        opts["remote_components"] = ["ejs:github"]
-    except ImportError:
-        pass
+    if os.path.exists(COOKIE_FILE): opts["cookiefile"] = COOKIE_FILE
+    try: import yt_dlp_ejs; opts["remote_components"] = ["ejs:github"]
+    except ImportError: pass
     return opts
 
+def obter_ydl_opts_base():
+    opts = {"extract_flat": True, "quiet": True, "ignoreerrors": True, "paths": {"home": BASE_DIR}}
+    return adicionar_extras_ydl(opts)
 
-def main():
-    print("\n" + "=" * 60)
-    print("      YOUTUBE OMNI-EXTRACTOR - SCRAPING COMPLETO")
-    print("=" * 60)
+def obter_url_video(v):
+    url = v.get("url") or v.get("webpage_url", "")
+    if url and not url.startswith("http"): url = f"https://www.youtube.com/watch?v={url}"
+    return url
 
-    url_canal = input("\n> Cole a URL do canal do YouTube:\n> ").strip()
-    if not url_canal:
-        print("[Erro] Nenhuma URL fornecida.")
+def exibir_menu():
+    print("\n" + "=" * 50)
+    print("  O QUE VOCÊ DESEJA EXTRAIR?")
+    print("=" * 50)
+    print("  [1] 🖼️  Thumbnails")
+    print("  [2] 🎬  Vídeos")
+    print("  [3] 📝  Transcrições")
+    print("  [4] 💬  Comentários")
+    print("  [5] 🎞️  Frames (Top 2 mais vistos)")
+    print("  [6] 📊  Metadados completos (JSON)")
+    print("  [7] 🚀  TUDO")
+    print("=" * 50)
+    print("  Separe com vírgula para múltiplas opções.")
+    print("  Exemplo: 1,3,4")
+    escolha = input("\n> Sua escolha: ").strip()
+    if not escolha or "7" in escolha:
+        return {"thumb", "video", "trans", "coment", "frames", "meta"}
+    mapa = {"1": "thumb", "2": "video", "3": "trans", "4": "coment", "5": "frames", "6": "meta"}
+    selecionados = set()
+    for c in escolha.replace(" ", "").split(","):
+        if c in mapa: selecionados.add(mapa[c])
+    if not selecionados:
+        print("[Aviso] Nenhuma opção válida. Extraindo TUDO.")
+        return {"thumb", "video", "trans", "coment", "frames", "meta"}
+    return selecionados
+
+
+def salvar_metadados_completos(pasta_canal, url_video, indice, titulo):
+    """Busca e salva o JSON COMPLETO do yt-dlp para o vídeo."""
+    pasta_meta = os.path.join(pasta_canal, "metadados")
+    os.makedirs(pasta_meta, exist_ok=True)
+    caminho_json = os.path.join(pasta_meta, f"{titulo}.json")
+    if os.path.exists(caminho_json):
+        logger.info(f"  │  [Metadados] Já existem.")
         return
-
-    # Normaliza URL para /videos se for canal
-    if "/videos" not in url_canal and "/watch?" not in url_canal and "/shorts" not in url_canal:
-        url_canal = url_canal.rstrip("/") + "/videos"
-
-    print(f"\n[*] URL: {url_canal}")
-    verificar_dependencias()
-    preparar_cookies()
-
-    # ── ETAPA 1: Listar todos os vídeos do canal ──
-    print("\n" + "-" * 60)
-    print("[ETAPA 1/6] Listando todos os vídeos do canal...")
-    print("-" * 60)
-
-    opts_lista = obter_ydl_opts_base()
+    delay_seguro("busca de metadados")
+    opts = {"skip_download": True, "quiet": True, "ignoreerrors": True, "paths": {"home": BASE_DIR}}
+    adicionar_extras_ydl(opts)
     try:
-        with yt_dlp.YoutubeDL(opts_lista) as ydl:
-            info = ydl.extract_info(url_canal, download=False)
+        preparar_cookies()
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url_video, download=False)
+        if info:
+            # Remove campos binários/pesados que não servem para análise
+            for k in ["formats", "thumbnails", "requested_formats", "requested_subtitles",
+                       "automatic_captions", "subtitles", "http_headers", "_format_sort_fields"]:
+                info.pop(k, None)
+            info["_extraido_em"] = datetime.now().isoformat()
+            with open(caminho_json, "w", encoding="utf-8") as f:
+                json.dump(info, f, ensure_ascii=False, indent=2, default=str)
+            logger.info(f"  │  [Metadados] JSON completo salvo.")
+        else:
+            logger.warning(f"  │  [Metadados] Não foi possível obter.")
     except Exception as e:
-        print(f"[Erro] Falha ao acessar canal: {e}")
-        return
+        logger.error(f"  │  [Metadados] Erro: {e}")
 
-    if not info:
-        print("[Erro] Não foi possível obter informações do canal.")
-        return
 
-    if "entries" in info:
-        videos_raw = list(info.get("entries", []))
-    else:
-        videos_raw = [info]
-
-    videos = [v for v in videos_raw if v and (v.get("url") or v.get("webpage_url"))]
-    if not videos:
-        print("[Erro] Nenhum vídeo encontrado no canal.")
-        return
-
-    nome_canal = limpar_nome(info.get("uploader") or info.get("channel") or info.get("title") or "Canal")
-    pasta_canal = os.path.join(BASE_DIR, nome_canal)
-    total = len(videos)
-    print(f"[OK] Canal: {nome_canal} | {total} vídeos encontrados")
-
-    # Criar estrutura de pastas
-    pastas = ["videos", "transcricoes", "thumbnails", "comentarios", "frames", "titulos"]
-    for p in pastas:
-        os.makedirs(os.path.join(pasta_canal, p), exist_ok=True)
-
-    # ── ETAPA 2: Salvar títulos + links ──
-    print("\n" + "-" * 60)
-    print("[ETAPA 2/6] Salvando títulos e links...")
-    print("-" * 60)
-
-    arquivo_titulos = os.path.join(pasta_canal, "titulos", "todos_os_videos.txt")
-    with open(arquivo_titulos, "w", encoding="utf-8") as f:
-        for i, v in enumerate(videos, 1):
-            titulo = v.get("title", f"Video_{i}")
-            url = v.get("url") or v.get("webpage_url", "")
-            if url and not url.startswith("http"):
-                url = f"https://www.youtube.com/watch?v={url}"
-            views = v.get("view_count", "N/A")
-            f.write(f"{i}. {titulo}\n   URL: {url}\n   Views: {views}\n\n")
-
-    print(f"[OK] {total} títulos salvos em titulos/todos_os_videos.txt")
-
-    # ── ETAPA 3: Baixar thumbnails de TODOS os vídeos ──
-    print("\n" + "-" * 60)
-    print("[ETAPA 3/6] Baixando thumbnails de todos os vídeos...")
-    print("-" * 60)
-
+def etapa_thumbnails(videos, pasta_canal, total):
+    logger.info("\n" + "-" * 60)
+    logger.info("[ETAPA] Baixando thumbnails...")
+    logger.info("-" * 60)
     for i, v in enumerate(videos, 1):
         titulo = limpar_nome(v.get("title", f"Video_{i}"))
         v_id = v.get("id", "")
         if not v_id:
-            url_v = v.get("url") or v.get("webpage_url", "")
-            match = re.search(r"(?:v=|/)([a-zA-Z0-9_-]{11})", url_v)
-            if match:
-                v_id = match.group(1)
+            match = re.search(r"(?:v=|/)([a-zA-Z0-9_-]{11})", v.get("url", "") or v.get("webpage_url", ""))
+            if match: v_id = match.group(1)
         if v_id:
             destino = os.path.join(pasta_canal, "thumbnails", f"{titulo}.jpg")
             if not os.path.exists(destino):
                 ok = baixar_thumb(v_id, destino)
                 status = "OK" if ok else "FALHA"
-            else:
-                status = "JÁ EXISTE"
-        else:
-            status = "SEM ID"
-        print(f"  [{i}/{total}] {status} - {titulo[:60]}")
+            else: status = "JÁ EXISTE"
+        else: status = "SEM ID"
+        logger.info(f"  [{i}/{total}] {status} - {titulo[:60]}")
 
-    # ── ETAPA 4: Baixar vídeos + transcrições + comentários ──
-    print("\n" + "-" * 60)
-    print("[ETAPA 4/6] Baixando vídeos, transcrições e comentários...")
-    print("-" * 60)
 
+def etapa_videos(videos, pasta_canal, total):
+    logger.info("\n" + "-" * 60)
+    logger.info("[ETAPA] Baixando vídeos...")
+    logger.info("-" * 60)
+    erros = []
+    for i, v in enumerate(videos, 1):
+        titulo = limpar_nome(v.get("title", f"Video_{i}"))
+        url_video = obter_url_video(v)
+        logger.info(f"\n  ┌─ [{i}/{total}] {titulo[:70]}")
+        caminho_base = os.path.join(pasta_canal, "videos", titulo)
+        existentes = [e for e in glob.glob(os.path.join(pasta_canal, "videos", f"{titulo}.*")) if not e.endswith(".part")]
+        if existentes:
+            logger.info("  └─ [Vídeo] Já baixado.")
+            continue
+        delay_seguro("download de vídeo")
+        opts = {"format": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+                "outtmpl": caminho_base + ".%(ext)s", "quiet": True, "no_warnings": True,
+                "ignoreerrors": True, "paths": {"home": BASE_DIR}}
+        adicionar_extras_ydl(opts)
+        try:
+            preparar_cookies()
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                vi = ydl.extract_info(url_video, download=True)
+                if vi: logger.info("  └─ [Vídeo] Baixado com sucesso.")
+                else: logger.warning("  └─ [Vídeo] FALHA."); erros.append(titulo)
+        except Exception as e:
+            logger.error(f"  └─ [Vídeo] ERRO: {e}"); erros.append(titulo)
+    return erros
+
+
+def etapa_transcricoes(videos, pasta_canal, total):
+    logger.info("\n" + "-" * 60)
+    logger.info("[ETAPA] Baixando transcrições...")
+    logger.info("-" * 60)
+    erros = []
     for i, v in enumerate(videos, 1):
         titulo_original = v.get("title", f"Video_{i}")
         titulo = limpar_nome(titulo_original)
-        url_video = v.get("url") or v.get("webpage_url", "")
-        if url_video and not url_video.startswith("http"):
-            url_video = f"https://www.youtube.com/watch?v={url_video}"
-        v_id = v.get("id", "")
-
-        print(f"\n  ┌─ [{i}/{total}] {titulo[:70]}")
-        print(f"  │  URL: {url_video}")
-
-        # ── 4a: Baixar vídeo ──
-        caminho_video_base = os.path.join(pasta_canal, "videos", titulo)
-        # Verifica se já foi baixado
-        existentes = glob.glob(os.path.join(pasta_canal, "videos", f"{titulo}.*"))
-        video_existentes = [e for e in existentes if not e.endswith(".part")]
-
-        if video_existentes:
-            print("  │  [Vídeo] Já baixado.")
-            arquivo_video = video_existentes[0]
+        url_video = obter_url_video(v)
+        logger.info(f"\n  ┌─ [{i}/{total}] {titulo[:70]}")
+        caminho_txt = os.path.join(pasta_canal, "transcricoes", f"{titulo}.txt")
+        if os.path.exists(caminho_txt):
+            logger.info("  └─ [Transcrição] Já existe."); continue
+        delay_seguro("busca de legendas")
+        pasta_temp = os.path.join(pasta_canal, "transcricoes", "_temp")
+        os.makedirs(pasta_temp, exist_ok=True)
+        opts = {"skip_download": True, "writesubtitles": True, "writeautomaticsub": True,
+                "subtitleslangs": ["pt", "en", "pt-BR"], "subtitlesformat": "vtt",
+                "outtmpl": os.path.join(pasta_temp, titulo) + ".%(ext)s",
+                "quiet": True, "ignoreerrors": True, "paths": {"home": BASE_DIR}}
+        adicionar_extras_ydl(opts)
+        texto = ""
+        try:
+            preparar_cookies()
+            with yt_dlp.YoutubeDL(opts) as ydl: ydl.extract_info(url_video, download=True)
+            for vtt in glob.glob(os.path.join(pasta_temp, f"{titulo}*.vtt")):
+                txt = limpar_vtt_para_txt(vtt)
+                if txt: texto = txt; break
+        except Exception as e: logger.debug(f"Erro legendas: {e}")
+        try: shutil.rmtree(pasta_temp, ignore_errors=True)
+        except Exception: pass
+        # Whisper fallback
+        if not texto and WHISPER_DISPONIVEL:
+            arqs = [e for e in glob.glob(os.path.join(pasta_canal, "videos", f"{titulo}.*")) if not e.endswith(".part")]
+            if arqs:
+                logger.info("  │  Legendas indisponíveis. Usando Whisper...")
+                texto = transcrever_com_whisper(arqs[0]) or ""
+        if texto:
+            with open(caminho_txt, "w", encoding="utf-8") as f:
+                f.write(f"Título: {titulo_original}\nURL: {url_video}\n{'─'*50}\n\n{texto}")
+            logger.info("  └─ [Transcrição] Salva.")
         else:
-            opts_video = {
-                "format": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-                "outtmpl": caminho_video_base + ".%(ext)s",
-                "quiet": True,
-                "no_warnings": True,
-                "ignoreerrors": True,
-                "paths": {"home": BASE_DIR},
-            }
-            adicionar_extras_ydl(opts_video)
-            try:
-                preparar_cookies()
-                with yt_dlp.YoutubeDL(opts_video) as ydl_v:
-                    vi = ydl_v.extract_info(url_video, download=True)
-                    if vi:
-                        arquivo_video = ydl_v.prepare_filename(vi)
-                        print("  │  [Vídeo] Baixado com sucesso.")
-                    else:
-                        arquivo_video = None
-                        print("  │  [Vídeo] FALHA no download.")
-            except Exception as e:
-                arquivo_video = None
-                print(f"  │  [Vídeo] ERRO: {e}")
+            logger.warning("  └─ [Transcrição] Não disponível."); erros.append(titulo)
+    return erros
 
-        # ── 4b: Transcrição (legendas YouTube → Whisper fallback) ──
-        caminho_trans_txt = os.path.join(pasta_canal, "transcricoes", f"{titulo}.txt")
-        if os.path.exists(caminho_trans_txt):
-            print("  │  [Transcrição] Já existe.")
-        else:
-            # Tenta legendas do YouTube
-            pasta_temp_sub = os.path.join(pasta_canal, "transcricoes", "_temp")
-            os.makedirs(pasta_temp_sub, exist_ok=True)
-            caminho_sub_base = os.path.join(pasta_temp_sub, titulo)
 
-            opts_sub = {
-                "skip_download": True,
-                "writesubtitles": True,
-                "writeautomaticsub": True,
-                "subtitleslangs": ["pt", "en", "pt-BR"],
-                "subtitlesformat": "vtt",
-                "outtmpl": caminho_sub_base + ".%(ext)s",
-                "quiet": True,
-                "ignoreerrors": True,
-                "paths": {"home": BASE_DIR},
-            }
-            adicionar_extras_ydl(opts_sub)
-
-            texto_transcricao = ""
-            try:
-                preparar_cookies()
-                with yt_dlp.YoutubeDL(opts_sub) as ydl_s:
-                    ydl_s.extract_info(url_video, download=True)
-
-                # Procura VTTs gerados
-                vtts = glob.glob(os.path.join(pasta_temp_sub, f"{titulo}*.vtt"))
-                for vtt_path in vtts:
-                    txt = limpar_vtt_para_txt(vtt_path)
-                    if txt:
-                        texto_transcricao = txt
-                        break
-            except Exception:
-                pass
-
-            # Limpa pasta temp
-            try:
-                shutil.rmtree(pasta_temp_sub, ignore_errors=True)
-            except Exception:
-                pass
-
-            # Fallback: Whisper
-            if not texto_transcricao and WHISPER_DISPONIVEL and arquivo_video and os.path.exists(arquivo_video):
-                print("  │  [Transcrição] Legendas não encontradas. Usando Whisper...")
-                texto_transcricao = transcrever_com_whisper(arquivo_video) or ""
-
-            if texto_transcricao:
-                # Salva com header informativo
-                with open(caminho_trans_txt, "w", encoding="utf-8") as f:
-                    f.write(f"Título: {titulo_original}\n")
-                    f.write(f"URL: {url_video}\n")
-                    f.write(f"{'─' * 50}\n\n")
-                    f.write(texto_transcricao)
-                print("  │  [Transcrição] Salva com sucesso.")
-            else:
-                print("  │  [Transcrição] Não disponível.")
-
-        # ── 4c: Comentários (max 100) ──
-        caminho_coment = os.path.join(pasta_canal, "comentarios", f"{titulo}.txt")
-        if os.path.exists(caminho_coment):
-            print("  │  [Comentários] Já existem.")
-        else:
-            opts_coment = {
-                "skip_download": True,
-                "getcomments": True,
-                "extractor_args": {
-                    "youtube": {
-                        "max_comments": [str(MAX_COMENTARIOS)],
-                        "comment_sort": ["top"],
-                    }
-                },
+def etapa_comentarios(videos, pasta_canal, total):
+    logger.info("\n" + "-" * 60)
+    logger.info("[ETAPA] Baixando comentários...")
+    logger.info("-" * 60)
+    erros = []
+    for i, v in enumerate(videos, 1):
+        titulo_original = v.get("title", f"Video_{i}")
+        titulo = limpar_nome(titulo_original)
+        url_video = obter_url_video(v)
+        logger.info(f"\n  ┌─ [{i}/{total}] {titulo[:70]}")
+        caminho = os.path.join(pasta_canal, "comentarios", f"{titulo}.txt")
+        if os.path.exists(caminho):
+            logger.info("  └─ [Comentários] Já existem."); continue
+        delay_seguro("busca de comentários")
+        opts = {"skip_download": True, "getcomments": True,
+                "extractor_args": {"youtube": {"max_comments": [str(MAX_COMENTARIOS)], "comment_sort": ["top"]}},
                 "outtmpl": os.path.join(pasta_canal, "comentarios", f"_temp_{titulo}.%(ext)s"),
-                "quiet": True,
-                "ignoreerrors": True,
-                "paths": {"home": BASE_DIR},
-            }
-            adicionar_extras_ydl(opts_coment)
+                "quiet": True, "ignoreerrors": True, "paths": {"home": BASE_DIR}}
+        adicionar_extras_ydl(opts)
+        try:
+            preparar_cookies()
+            with yt_dlp.YoutubeDL(opts) as ydl: info_c = ydl.extract_info(url_video, download=False)
+            if info_c and info_c.get("comments"):
+                comms = info_c["comments"][:MAX_COMENTARIOS]
+                with open(caminho, "w", encoding="utf-8") as f:
+                    f.write(f"Título: {titulo_original}\nURL: {url_video}\nTotal: {len(comms)}\n{'─'*50}\n\n")
+                    for ci, c in enumerate(comms, 1):
+                        autor = c.get("author", "Anônimo")
+                        texto = c.get("text", "").replace("\n", " ").strip()
+                        likes = c.get("like_count", 0)
+                        if texto: f.write(f"{ci}. [{autor}] (❤ {likes})\n   {texto}\n\n")
+                logger.info(f"  └─ [Comentários] {len(comms)} salvos.")
+            else: logger.warning("  └─ [Comentários] Nenhum encontrado.")
+        except Exception as e: logger.error(f"  └─ [Comentários] Erro: {e}"); erros.append(titulo)
+    return erros
 
-            try:
-                preparar_cookies()
-                with yt_dlp.YoutubeDL(opts_coment) as ydl_c:
-                    info_c = ydl_c.extract_info(url_video, download=False)
 
-                if info_c and info_c.get("comments"):
-                    comms = info_c["comments"][:MAX_COMENTARIOS]
-                    with open(caminho_coment, "w", encoding="utf-8") as f:
-                        f.write(f"Título: {titulo_original}\n")
-                        f.write(f"URL: {url_video}\n")
-                        f.write(f"Total de comentários extraídos: {len(comms)}\n")
-                        f.write(f"{'─' * 50}\n\n")
-                        for ci, c in enumerate(comms, 1):
-                            autor = c.get("author", "Anônimo")
-                            texto = c.get("text", "").replace("\n", " ").strip()
-                            likes = c.get("like_count", 0)
-                            if texto:
-                                f.write(f"{ci}. [{autor}] (❤ {likes})\n   {texto}\n\n")
-                    print(f"  │  [Comentários] {len(comms)} salvos.")
-                else:
-                    print("  │  [Comentários] Nenhum encontrado.")
-            except Exception as e:
-                print(f"  │  [Comentários] Erro: {e}")
+def etapa_metadados(videos, pasta_canal, total):
+    logger.info("\n" + "-" * 60)
+    logger.info("[ETAPA] Extraindo metadados completos (JSON)...")
+    logger.info("-" * 60)
+    for i, v in enumerate(videos, 1):
+        titulo = limpar_nome(v.get("title", f"Video_{i}"))
+        url_video = obter_url_video(v)
+        logger.info(f"\n  ┌─ [{i}/{total}] {titulo[:70]}")
+        salvar_metadados_completos(pasta_canal, url_video, i, titulo)
+        logger.info(f"  └─ Concluído.")
 
-        print(f"  └─ Concluído.")
 
-    # ── ETAPA 5: Extrair frames dos 2 vídeos mais vistos ──
-    print("\n" + "-" * 60)
-    print("[ETAPA 5/6] Extraindo frames dos 2 vídeos mais vistos...")
-    print("-" * 60)
-
-    videos_com_views = [v for v in videos if v.get("view_count") is not None]
-    if videos_com_views:
-        top2 = sorted(videos_com_views, key=lambda x: x.get("view_count", 0), reverse=True)[:2]
-    else:
-        print("  [Aviso] Sem dados de views, usando os 2 primeiros vídeos.")
-        top2 = videos[:2]
-
+def etapa_frames(videos, pasta_canal):
+    logger.info("\n" + "-" * 60)
+    logger.info("[ETAPA] Extraindo frames dos 2 vídeos mais vistos...")
+    logger.info("-" * 60)
+    vids = [v for v in videos if v.get("view_count") is not None]
+    if vids: top2 = sorted(vids, key=lambda x: x.get("view_count", 0), reverse=True)[:2]
+    else: logger.warning("Sem views, usando 2 primeiros."); top2 = videos[:2]
     for rank, v in enumerate(top2, 1):
         titulo = limpar_nome(v.get("title", f"Top_{rank}"))
-        url_video = v.get("url") or v.get("webpage_url", "")
-        if url_video and not url_video.startswith("http"):
-            url_video = f"https://www.youtube.com/watch?v={url_video}"
+        url_video = obter_url_video(v)
         views = v.get("view_count", "N/A")
-
-        print(f"\n  Top {rank}: {titulo[:60]} ({views} views)")
-
-        pasta_frames = os.path.join(pasta_canal, "frames", f"Top{rank}_{titulo[:80]}")
-        os.makedirs(pasta_frames, exist_ok=True)
-
-        # Verifica se frames já foram extraídos
-        frames_existentes = glob.glob(os.path.join(pasta_frames, f"{titulo}_frame_*.jpg"))
-        if frames_existentes:
-            print(f"  [Frames] Já existem ({len(frames_existentes)} frames).")
-            continue
-
-        # Procura vídeo já baixado
+        logger.info(f"\n  Top {rank}: {titulo[:60]} ({views} views)")
+        pasta_f = os.path.join(pasta_canal, "frames", f"Top{rank}_{titulo[:80]}")
+        os.makedirs(pasta_f, exist_ok=True)
+        if glob.glob(os.path.join(pasta_f, f"{titulo}_frame_*.jpg")):
+            logger.info(f"  [Frames] Já existem."); continue
         video_baixado = None
-        existentes = glob.glob(os.path.join(pasta_canal, "videos", f"{titulo}.*"))
-        for e in existentes:
-            if not e.endswith(".part") and not e.endswith(".txt"):
-                video_baixado = e
-                break
-
-        # Se não foi baixado, baixa agora
+        for e in glob.glob(os.path.join(pasta_canal, "videos", f"{titulo}.*")):
+            if not e.endswith(".part") and not e.endswith(".txt"): video_baixado = e; break
         if not video_baixado or not os.path.exists(video_baixado):
-            temp_path = os.path.join(pasta_frames, f"_temp_video.%(ext)s")
-            opts_dl = {
-                "format": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-                "outtmpl": temp_path,
-                "quiet": True,
-                "ignoreerrors": True,
-                "paths": {"home": BASE_DIR},
-            }
-            adicionar_extras_ydl(opts_dl)
+            delay_seguro("download de vídeo para frames")
+            opts = {"format": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+                    "outtmpl": os.path.join(pasta_f, "_temp_video.%(ext)s"),
+                    "quiet": True, "ignoreerrors": True, "paths": {"home": BASE_DIR}}
+            adicionar_extras_ydl(opts)
             try:
                 preparar_cookies()
-                with yt_dlp.YoutubeDL(opts_dl) as ydl_dl:
-                    vi = ydl_dl.extract_info(url_video, download=True)
-                    if vi:
-                        video_baixado = ydl_dl.prepare_filename(vi)
-            except Exception as e:
-                print(f"  [Erro] Não foi possível baixar vídeo para frames: {e}")
-                continue
-
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    vi = ydl.extract_info(url_video, download=True)
+                    if vi: video_baixado = ydl.prepare_filename(vi)
+            except Exception as e: logger.error(f"  [Erro] Download frames: {e}"); continue
         if not video_baixado or not os.path.exists(video_baixado):
-            print("  [Erro] Arquivo de vídeo não encontrado para extração de frames.")
-            continue
-
-        # Extrair frames com ffmpeg
+            logger.error("  [Erro] Vídeo não encontrado."); continue
         try:
-            # Salva info do vídeo
-            with open(os.path.join(pasta_frames, f"{titulo}_info.txt"), "w", encoding="utf-8") as f:
+            with open(os.path.join(pasta_f, f"{titulo}_info.txt"), "w", encoding="utf-8") as f:
                 f.write(f"Título: {v.get('title', titulo)}\nURL: {url_video}\nViews: {views}\n")
+            cmd = ["ffmpeg", "-y", "-i", video_baixado, "-vf", f"fps=1/{INTERVALO_FRAMES}",
+                   "-q:v", "2", os.path.join(pasta_f, f"{titulo}_frame_%04d.jpg")]
+            subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            n = len(glob.glob(os.path.join(pasta_f, f"{titulo}_frame_*.jpg")))
+            for tv in glob.glob(os.path.join(pasta_f, "_temp_video.*")):
+                try: os.remove(tv)
+                except OSError: pass
+            logger.info(f"  [OK] {n} frames extraídos (intervalo: {INTERVALO_FRAMES}s)")
+        except Exception as e: logger.error(f"  [Erro] Frames: {e}")
 
-            cmd = [
-                "ffmpeg", "-y", "-i", video_baixado,
-                "-vf", f"fps=1/{INTERVALO_FRAMES}",
-                "-q:v", "2",
-                os.path.join(pasta_frames, f"{titulo}_frame_%04d.jpg")
-            ]
-            resultado = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            n_frames = len(glob.glob(os.path.join(pasta_frames, f"{titulo}_frame_*.jpg")))
 
-            # Remove vídeo temp se estava na pasta frames
-            temp_videos = glob.glob(os.path.join(pasta_frames, "_temp_video.*"))
-            for tv in temp_videos:
-                try:
-                    os.remove(tv)
-                except OSError:
-                    pass
+def main():
+    inicio = time.time()
+    logger.info("\n" + "=" * 60)
+    logger.info("      YOUTUBE OMNI-EXTRACTOR v2.0")
+    logger.info("=" * 60)
+    logger.info(f"Início: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Delay: {DELAY_MIN}-{DELAY_MAX}s entre requisições")
 
-            print(f"  [OK] {n_frames} frames extraídos (intervalo: {INTERVALO_FRAMES}s)")
-        except Exception as e:
-            print(f"  [Erro] Falha ao extrair frames: {e}")
+    url_canal = input("\n> Cole a URL do canal do YouTube:\n> ").strip()
+    if not url_canal: logger.error("Nenhuma URL fornecida."); return
+    if "/videos" not in url_canal and "/watch?" not in url_canal and "/shorts" not in url_canal:
+        url_canal = url_canal.rstrip("/") + "/videos"
 
-    # ── ETAPA 6: Resumo final ──
-    print("\n" + "=" * 60)
-    print("[ETAPA 6/6] RESUMO FINAL")
-    print("=" * 60)
+    logger.info(f"URL: {url_canal}")
+    verificar_dependencias()
+    preparar_cookies()
 
-    def contar_arquivos(pasta, ext="*"):
-        return len(glob.glob(os.path.join(pasta_canal, pasta, f"*.{ext}")))
+    # Menu interativo
+    opcoes = exibir_menu()
+    nomes = {"thumb": "Thumbnails", "video": "Vídeos", "trans": "Transcrições",
+             "coment": "Comentários", "frames": "Frames", "meta": "Metadados"}
+    logger.info(f"Selecionado: {', '.join(nomes[o] for o in opcoes)}")
 
-    print(f"""
-  Canal:         {nome_canal}
-  Total vídeos:  {total}
-  Vídeos:        {contar_arquivos('videos')} baixados
-  Thumbnails:    {contar_arquivos('thumbnails', 'jpg')} baixadas
-  Transcrições:  {contar_arquivos('transcricoes', 'txt')} salvas
-  Comentários:   {contar_arquivos('comentarios', 'txt')} salvos
-  Frames:        Top 2 vídeos processados
+    # Listar vídeos
+    logger.info("\n" + "-" * 60)
+    logger.info("[ETAPA 1] Listando vídeos do canal...")
+    logger.info("-" * 60)
+    try:
+        with yt_dlp.YoutubeDL(obter_ydl_opts_base()) as ydl:
+            info = ydl.extract_info(url_canal, download=False)
+    except Exception as e: logger.error(f"Falha ao acessar canal: {e}"); return
+    if not info: logger.error("Sem informações do canal."); return
+    videos_raw = list(info.get("entries", [])) if "entries" in info else [info]
+    videos = [v for v in videos_raw if v and (v.get("url") or v.get("webpage_url"))]
+    if not videos: logger.error("Nenhum vídeo encontrado."); return
 
-  📁 Tudo salvo em: {pasta_canal}
-""")
-    print("=" * 60)
-    print("PROCESSO FINALIZADO!")
-    print("=" * 60)
+    nome_canal = limpar_nome(info.get("uploader") or info.get("channel") or info.get("title") or "Canal")
+    pasta_canal = os.path.join(BASE_DIR, nome_canal)
+    total = len(videos)
+    logger.info(f"Canal: {nome_canal} | {total} vídeos")
 
+    for p in ["videos", "transcricoes", "thumbnails", "comentarios", "frames", "titulos", "metadados"]:
+        os.makedirs(os.path.join(pasta_canal, p), exist_ok=True)
+
+    # Salvar títulos sempre
+    arq_tit = os.path.join(pasta_canal, "titulos", "todos_os_videos.txt")
+    with open(arq_tit, "w", encoding="utf-8") as f:
+        for i, v in enumerate(videos, 1):
+            t = v.get("title", f"Video_{i}")
+            u = obter_url_video(v)
+            vw = v.get("view_count", "N/A")
+            f.write(f"{i}. {t}\n   URL: {u}\n   Views: {vw}\n\n")
+    logger.info(f"{total} títulos salvos.")
+
+    # Executar etapas selecionadas
+    erros = []
+    if "thumb" in opcoes: etapa_thumbnails(videos, pasta_canal, total)
+    if "video" in opcoes: erros += etapa_videos(videos, pasta_canal, total)
+    if "trans" in opcoes: erros += etapa_transcricoes(videos, pasta_canal, total)
+    if "coment" in opcoes: erros += etapa_comentarios(videos, pasta_canal, total)
+    if "meta" in opcoes: etapa_metadados(videos, pasta_canal, total)
+    if "frames" in opcoes: etapa_frames(videos, pasta_canal)
+
+    # Resumo
+    duracao = time.time() - inicio
+    m, s = int(duracao // 60), int(duracao % 60)
+    def contar(p, ext="*"): return len(glob.glob(os.path.join(pasta_canal, p, f"*.{ext}")))
+    logger.info("\n" + "=" * 60)
+    logger.info("RESUMO FINAL")
+    logger.info("=" * 60)
+    logger.info(f"  Canal:         {nome_canal}")
+    logger.info(f"  Total vídeos:  {total}")
+    if "video" in opcoes: logger.info(f"  Vídeos:        {contar('videos')} baixados")
+    if "thumb" in opcoes: logger.info(f"  Thumbnails:    {contar('thumbnails', 'jpg')} baixadas")
+    if "trans" in opcoes: logger.info(f"  Transcrições:  {contar('transcricoes', 'txt')} salvas")
+    if "coment" in opcoes: logger.info(f"  Comentários:   {contar('comentarios', 'txt')} salvos")
+    if "meta" in opcoes: logger.info(f"  Metadados:     {contar('metadados', 'json')} JSONs salvos")
+    if "frames" in opcoes: logger.info(f"  Frames:        Top 2 processados")
+    logger.info(f"  Tempo total:   {m}min {s}s")
+    logger.info(f"  📁 Pasta: {pasta_canal}")
+    logger.info(f"  📝 Log:   {LOG_FILE}")
+    if erros:
+        logger.warning(f"\n⚠ {len(erros)} problema(s):")
+        for e in erros: logger.warning(f"  - {e}")
+    else: logger.info("\n✅ Nenhum erro!")
+    logger.info("=" * 60)
+    logger.info("PROCESSO FINALIZADO!")
+    logger.info("=" * 60)
 
 if __name__ == "__main__":
     main()

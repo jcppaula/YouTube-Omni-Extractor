@@ -7,14 +7,14 @@ __pycache__/
 *.ytdl
 *.jpg
 *.vtt
-whisper_install_log.txt
+# Arquivos de sessão e sensíveis (NUNCA SUBIR)
+cookies.txt
 cookies_runtime.txt
-# Ignorar pastas de saída (canais processados)
-*/videos/
-*/transcricoes/
-*/thumbnails/
-*/comentarios/
-*/frames/
-*/titulos/
-# .env se tiver dados sensíveis, mas aqui é só config geral
 .env
+
+# Logs e instalações
+*.log
+whisper_install_log.txt
+
+# Pastas de saída (canais processados)
+*/
