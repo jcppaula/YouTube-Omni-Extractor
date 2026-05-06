@@ -354,16 +354,8 @@ def etapa_frames(videos, pasta_canal):
         except Exception as e: logger.error(f"  [Erro] Frames: {e}")
 
 
-def main():
+def executar_extracao_web(url_canal, opcoes):
     inicio = time.time()
-    logger.info("\n" + "=" * 60)
-    logger.info("      YOUTUBE OMNI-EXTRACTOR v2.0")
-    logger.info("=" * 60)
-    logger.info(f"Início: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"Delay: {DELAY_MIN}-{DELAY_MAX}s entre requisições")
-
-    url_canal = input("\n> Cole a URL do canal do YouTube:\n> ").strip()
-    if not url_canal: logger.error("Nenhuma URL fornecida."); return
     if "/videos" not in url_canal and "/watch?" not in url_canal and "/shorts" not in url_canal:
         url_canal = url_canal.rstrip("/") + "/videos"
 
@@ -371,11 +363,9 @@ def main():
     verificar_dependencias()
     preparar_cookies()
 
-    # Menu interativo
-    opcoes = exibir_menu()
     nomes = {"thumb": "Thumbnails", "video": "Vídeos", "trans": "Transcrições",
              "coment": "Comentários", "frames": "Frames", "meta": "Metadados"}
-    logger.info(f"Selecionado: {', '.join(nomes[o] for o in opcoes)}")
+    logger.info(f"Selecionado: {', '.join(nomes[o] for o in opcoes if o in nomes)}")
 
     # Listar vídeos
     logger.info("\n" + "-" * 60)
@@ -442,6 +432,22 @@ def main():
     logger.info("=" * 60)
     logger.info("PROCESSO FINALIZADO!")
     logger.info("=" * 60)
+
+
+def main():
+    logger.info("\n" + "=" * 60)
+    logger.info("      YOUTUBE OMNI-EXTRACTOR v2.0")
+    logger.info("=" * 60)
+    logger.info(f"Início: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Delay: {DELAY_MIN}-{DELAY_MAX}s entre requisições")
+
+    url_canal = input("\n> Cole a URL do canal do YouTube:\n> ").strip()
+    if not url_canal: logger.error("Nenhuma URL fornecida."); return
+
+    # Menu interativo
+    opcoes = exibir_menu()
+    
+    executar_extracao_web(url_canal, opcoes)
 
 if __name__ == "__main__":
     main()

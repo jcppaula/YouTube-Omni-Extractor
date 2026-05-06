@@ -4,10 +4,11 @@ O **YouTube Omni-Extractor** é uma ferramenta profissional de automação para 
 
 ## 🌟 Novidades da v2.0
 
+- 🌐 **Interface Web (Novo):** Painel de controle no navegador com visual premium (Dark Mode + Glassmorphism).
 - 🎛️ **Menu Interativo:** Escolha exatamente o que deseja baixar (só transcrições, só vídeos, metadados, etc.).
 - 📊 **Metadados Ricos (JSON):** Agora extrai o JSON completo do YouTube (tags, categorias, likes, descrição detalhada).
 - 🛡️ **Delay Inteligente:** Intervalos aleatórios de 10-20 segundos entre requisições para evitar bloqueios de IP (429 Too Many Requests).
-- 📝 **Logging Profissional:** Todo o progresso e erros são salvos em `execucao.log`.
+- 📝 **Logging Profissional:** Todo o progresso e erros são salvos em `execucao.log` e transmitidos em tempo real para a Web UI.
 - 🧠 **Whisper Otimizado:** Modelo de IA carregado apenas uma vez na memória.
 
 ## 🌟 Funcionalidades Principais
@@ -47,7 +48,20 @@ Para usar o script, você precisa de um arquivo `cookies.txt` na raiz do projeto
 
 ## 🚀 Como Usar
 
-1. Execute o script: `python main.py`.
+Você tem duas opções para usar a ferramenta: pela **Interface Web** (recomendado) ou pelo **Terminal**.
+
+### Opção 1: Interface Web (Recomendado)
+A nova versão conta com um painel de controle direto no seu navegador, oferecendo acompanhamento em tempo real, biblioteca de extrações e design moderno.
+1. Inicie o servidor web:
+   ```powershell
+   python app.py
+   ```
+2. Abra seu navegador no endereço: **`http://127.0.0.1:5000`**
+3. Cole a URL, selecione os módulos e clique em Iniciar.
+
+### Opção 2: Pelo Terminal
+Se preferir a experiência clássica em linha de comando:
+1. Execute o script original: `python main.py`.
 2. Insira a URL do canal.
 3. Escolha as opções no menu interativo (Ex: `1,3,6` para Thumbs, Transcrições e Metadados).
 
