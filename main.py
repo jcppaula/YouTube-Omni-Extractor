@@ -376,14 +376,30 @@ def executar_extracao_web(url_canal, opcoes):
             info = ydl.extract_info(url_canal, download=False)
     except Exception as e: logger.error(f"Falha ao acessar canal: {e}"); return
     if not info: logger.error("Sem informações do canal."); return
+
+    # Tenta buscar a playlist de vídeos mais populares do canal (UULP)
+    channel_id = info.get("channel_id") or (info.get("id") if info.get("id", "").startswith("UC") else None)
+    if channel_id and channel_id.startswith("UC"):
+        url_popular = f"https://www.youtube.com/playlist?list=UULP{channel_id[2:]}"
+        logger.info(f"Canal detectado. Buscando os vídeos mais populares usando a playlist: {url_popular}")
+        try:
+            with yt_dlp.YoutubeDL(obter_ydl_opts_base()) as ydl:
+                info_popular = ydl.extract_info(url_popular, download=False)
+                if info_popular:
+                    info = info_popular
+        except Exception as e:
+            logger.warning(f"Não foi possível carregar a playlist de populares ({e}). Usando ordenação padrão.")
+
     videos_raw = list(info.get("entries", [])) if "entries" in info else [info]
     videos = [v for v in videos_raw if v and (v.get("url") or v.get("webpage_url"))]
     if not videos: logger.error("Nenhum vídeo encontrado."); return
 
+    # Filtrar para baixar somente os 5 vídeos mais vistos
+    videos = videos[:5]
     nome_canal = limpar_nome(info.get("uploader") or info.get("channel") or info.get("title") or "Canal")
     pasta_canal = os.path.join(BASE_DIR, nome_canal)
     total = len(videos)
-    logger.info(f"Canal: {nome_canal} | {total} vídeos")
+    logger.info(f"Canal: {nome_canal} | Selecionados os {total} vídeos mais populares/vistos")
 
     for p in ["videos", "transcricoes", "thumbnails", "comentarios", "frames", "titulos", "metadados"]:
         os.makedirs(os.path.join(pasta_canal, p), exist_ok=True)
