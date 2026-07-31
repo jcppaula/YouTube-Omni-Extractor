@@ -43,6 +43,8 @@ def delay_seguro(ctx="requisição"):
     time.sleep(t)
 
 def limpar_nome(nome):
+    if not nome or not isinstance(nome, str):
+        return ""
     nome = re.sub(r'[\\/*?:"<>|]', "", nome).strip()
     return nome[:150] if len(nome) > 150 else nome
 
@@ -167,7 +169,7 @@ def etapa_thumbnails(videos, pasta_canal, total):
     logger.info("[ETAPA] Baixando thumbnails...")
     logger.info("-" * 60)
     for i, v in enumerate(videos, 1):
-        titulo = limpar_nome(v.get("title", f"Video_{i}"))
+        titulo = limpar_nome((v.get("title") or f"Video_{i}"))
         v_id = v.get("id", "")
         if not v_id:
             match = re.search(r"(?:v=|/)([a-zA-Z0-9_-]{11})", v.get("url", "") or v.get("webpage_url", ""))
@@ -188,7 +190,7 @@ def etapa_videos(videos, pasta_canal, total):
     logger.info("-" * 60)
     erros = []
     for i, v in enumerate(videos, 1):
-        titulo = limpar_nome(v.get("title", f"Video_{i}"))
+        titulo = limpar_nome((v.get("title") or f"Video_{i}"))
         url_video = obter_url_video(v)
         logger.info(f"\n  ┌─ [{i}/{total}] {titulo[:70]}")
         caminho_base = os.path.join(pasta_canal, "videos", titulo)
@@ -218,7 +220,7 @@ def etapa_transcricoes(videos, pasta_canal, total):
     logger.info("-" * 60)
     erros = []
     for i, v in enumerate(videos, 1):
-        titulo_original = v.get("title", f"Video_{i}")
+        titulo_original = (v.get("title") or f"Video_{i}")
         titulo = limpar_nome(titulo_original)
         url_video = obter_url_video(v)
         logger.info(f"\n  ┌─ [{i}/{total}] {titulo[:70]}")
@@ -264,7 +266,7 @@ def etapa_comentarios(videos, pasta_canal, total):
     logger.info("-" * 60)
     erros = []
     for i, v in enumerate(videos, 1):
-        titulo_original = v.get("title", f"Video_{i}")
+        titulo_original = (v.get("title") or f"Video_{i}")
         titulo = limpar_nome(titulo_original)
         url_video = obter_url_video(v)
         logger.info(f"\n  ┌─ [{i}/{total}] {titulo[:70]}")
@@ -300,7 +302,7 @@ def etapa_metadados(videos, pasta_canal, total):
     logger.info("[ETAPA] Extraindo metadados completos (JSON)...")
     logger.info("-" * 60)
     for i, v in enumerate(videos, 1):
-        titulo = limpar_nome(v.get("title", f"Video_{i}"))
+        titulo = limpar_nome((v.get("title") or f"Video_{i}"))
         url_video = obter_url_video(v)
         logger.info(f"\n  ┌─ [{i}/{total}] {titulo[:70]}")
         salvar_metadados_completos(pasta_canal, url_video, i, titulo)
@@ -315,7 +317,7 @@ def etapa_frames(videos, pasta_canal):
     if vids: top2 = sorted(vids, key=lambda x: x.get("view_count", 0), reverse=True)[:2]
     else: logger.warning("Sem views, usando 2 primeiros."); top2 = videos[:2]
     for rank, v in enumerate(top2, 1):
-        titulo = limpar_nome(v.get("title", f"Top_{rank}"))
+        titulo = limpar_nome((v.get("title") or f"Top_{rank}"))
         url_video = obter_url_video(v)
         views = v.get("view_count", "N/A")
         logger.info(f"\n  Top {rank}: {titulo[:60]} ({views} views)")
@@ -420,7 +422,7 @@ def executar_extracao_web(url_canal, opcoes):
     arq_tit = os.path.join(pasta_canal, "titulos", "todos_os_videos.txt")
     with open(arq_tit, "w", encoding="utf-8") as f:
         for i, v in enumerate(videos_todos, 1):
-            t = v.get("title", f"Video_{i}")
+            t = v.get("title") or f"Video_{i}"
             u = obter_url_video(v)
             vw = v.get("view_count", "N/A")
             f.write(f"{i}. {t}\n   URL: {u}\n   Views: {vw}\n\n")
