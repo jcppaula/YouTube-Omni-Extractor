@@ -396,7 +396,12 @@ def executar_extracao_web(url_canal, opcoes):
 
     # Filtrar para baixar somente os 5 vídeos mais vistos
     videos = videos[:5]
-    nome_canal = limpar_nome(info.get("uploader") or info.get("channel") or info.get("title") or "Canal")
+    nome_canal = limpar_nome(info.get("uploader") or info.get("channel") or info.get("title") or "")
+    if not nome_canal:
+        logger.error("❌ Não foi possível identificar o nome do canal. A URL pode estar incorreta ou o canal não foi encontrado.")
+        logger.error(f"   URL utilizada: {url_canal}")
+        logger.error("   Dica: Certifique-se de copiar a URL completa do canal, ex: https://www.youtube.com/@NomeDoCanal")
+        return
     pasta_canal = os.path.join(BASE_DIR, nome_canal)
     total = len(videos)
     logger.info(f"Canal: {nome_canal} | Selecionados os {total} vídeos mais populares/vistos")
@@ -450,6 +455,18 @@ def executar_extracao_web(url_canal, opcoes):
     logger.info("=" * 60)
 
 
+def normalizar_url(url):
+    """Garante que a URL tenha o esquema https:// e seja válida."""
+    url = url.strip()
+    # Remove espaços e barras extras
+    if not url:
+        return url
+    # Adiciona https:// se ausente
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+    return url
+
+
 def main():
     logger.info("\n" + "=" * 60)
     logger.info("      YOUTUBE OMNI-EXTRACTOR v2.0")
@@ -457,12 +474,19 @@ def main():
     logger.info(f"Início: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"Delay: {DELAY_MIN}-{DELAY_MAX}s entre requisições")
 
-    url_canal = input("\n> Cole a URL do canal do YouTube:\n> ").strip()
-    if not url_canal: logger.error("Nenhuma URL fornecida."); return
+    url_raw = input("\n> Cole a URL do canal do YouTube:\n> ").strip()
+    if not url_raw: logger.error("Nenhuma URL fornecida."); return
+
+    url_canal = normalizar_url(url_raw)
+    if "youtube.com" not in url_canal and "youtu.be" not in url_canal:
+        logger.error(f"URL inválida: '{url_canal}'. Certifique-se de colar a URL completa do canal do YouTube.")
+        return
+
+    logger.info(f"URL normalizada: {url_canal}")
 
     # Menu interativo
     opcoes = exibir_menu()
-    
+
     executar_extracao_web(url_canal, opcoes)
 
 if __name__ == "__main__":
