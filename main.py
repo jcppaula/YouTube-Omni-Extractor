@@ -164,6 +164,55 @@ def salvar_metadados_completos(pasta_canal, url_video, indice, titulo):
         logger.error(f"  │  [Metadados] Erro: {e}")
 
 
+def salvar_indice_json(pasta_canal, videos, info_canal):
+    """PATCH 1 - Indice canonico do canal.
+
+    Grava titulos/indice.json com id, titulo, url, views, duracao e data de TODOS
+    os videos listados. Nao faz nenhuma requisicao extra: usa apenas o que o
+    extract_flat ja devolveu. Este arquivo e a chave que liga thumbnail,
+    transcricao, comentario e metadado ao mesmo videoId.
+    """
+    pasta_tit = os.path.join(pasta_canal, "titulos")
+    os.makedirs(pasta_tit, exist_ok=True)
+    caminho = os.path.join(pasta_tit, "indice.json")
+
+    itens = []
+    for i, v in enumerate(videos, 1):
+        vid = v.get("id") or ""
+        url = obter_url_video(v)
+        if not vid and "watch?v=" in url:
+            vid = url.split("watch?v=")[-1].split("&")[0]
+        titulo_original = v.get("title") or f"Video_{i}"
+        itens.append({
+            "ordem": i,
+            "id": vid,
+            "titulo": titulo_original,
+            "titulo_arquivo": limpar_nome(titulo_original),
+            "url": url,
+            "view_count": v.get("view_count"),
+            "duration": v.get("duration"),
+            "upload_date": v.get("upload_date") or v.get("release_timestamp"),
+            "timestamp": v.get("timestamp"),
+        })
+
+    payload = {
+        "canal": info_canal.get("uploader") or info_canal.get("channel") or "",
+        "channel_id": info_canal.get("channel_id") or "",
+        "channel_url": info_canal.get("channel_url") or "",
+        "subscribers": info_canal.get("channel_follower_count"),
+        "total_videos": len(itens),
+        "extraido_em": datetime.now().isoformat(),
+        "videos": itens,
+    }
+    with open(caminho, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+
+    com_id = sum(1 for it in itens if it["id"])
+    com_views = sum(1 for it in itens if it["view_count"] is not None)
+    logger.info(f"[indice.json] {len(itens)} videos | {com_id} com videoId | {com_views} com views")
+    return caminho
+
+
 def etapa_thumbnails(videos, pasta_canal, total):
     logger.info("\n" + "-" * 60)
     logger.info("[ETAPA] Baixando thumbnails...")
@@ -394,7 +443,17 @@ def executar_extracao_web(url_canal, opcoes):
 
     videos_raw = list(info.get("entries", [])) if "entries" in info else [info]
     videos_todos = [v for v in videos_raw if v and (v.get("url") or v.get("webpage_url"))]
-    if not videos_todos: logger.error("Nenhum vídeo encontrado."); return
+    if not videos_todos: logger.error("Nenhum video encontrado."); return
+
+    # PATCH 1 - guarda: se a listagem devolveu 1 unica "entrada" que na verdade e a
+    # propria pagina do canal, aborta antes de gerar um JSON gigante e inutil.
+    if len(videos_todos) == 1:
+        _u = obter_url_video(videos_todos[0])
+        if ("/watch?v=" not in _u) and ("youtu.be/" not in _u):
+            logger.error("A listagem devolveu a pagina do canal, nao uma lista de videos.")
+            logger.error(f"   URL resolvida: {_u}")
+            logger.error("   Dica: use a URL no formato https://www.youtube.com/@Canal/videos")
+            return
 
     nome_canal = limpar_nome(info.get("uploader") or info.get("channel") or info.get("title") or "")
     if not nome_canal:
@@ -406,14 +465,25 @@ def executar_extracao_web(url_canal, opcoes):
 
     # Thumbs, títulos e transcrições → TODOS os vídeos
     total_todos = len(videos_todos)
-    # Download de vídeo, comentários, metadados e frames → Top N (configurável via .env)
-    MAX_VIDEOS_DOWNLOAD = int(os.getenv("MAX_VIDEOS_DOWNLOAD", 5))
-    videos_top = videos_todos[:MAX_VIDEOS_DOWNLOAD]
-    total_top = len(videos_top)
+
+    # Limites independentes por tipo de extração (configuráveis via .env)
+    MAX_VIDEOS_DOWNLOAD    = int(os.getenv("MAX_VIDEOS_DOWNLOAD",    5))
+    MAX_VIDEOS_METADADOS   = int(os.getenv("MAX_VIDEOS_METADADOS",  30))
+    MAX_VIDEOS_COMENTARIOS = int(os.getenv("MAX_VIDEOS_COMENTARIOS", 10))
+
+    videos_download    = videos_todos[:MAX_VIDEOS_DOWNLOAD]
+    videos_metadados   = videos_todos[:MAX_VIDEOS_METADADOS]
+    videos_comentarios = videos_todos[:MAX_VIDEOS_COMENTARIOS]
+
+    total_download    = len(videos_download)
+    total_metadados   = len(videos_metadados)
+    total_comentarios = len(videos_comentarios)
 
     logger.info(f"Canal: {nome_canal} | {total_todos} vídeos encontrados no total")
     logger.info(f"  → Thumbnails, Títulos e Transcrições: todos os {total_todos} vídeos")
-    logger.info(f"  → Download de vídeo, Comentários, Metadados, Frames: top {total_top} (MAX_VIDEOS_DOWNLOAD={MAX_VIDEOS_DOWNLOAD})")
+    logger.info(f"  → Download de vídeo: top {total_download} (MAX_VIDEOS_DOWNLOAD={MAX_VIDEOS_DOWNLOAD})")
+    logger.info(f"  → Comentários:       top {total_comentarios} (MAX_VIDEOS_COMENTARIOS={MAX_VIDEOS_COMENTARIOS})")
+    logger.info(f"  → Metadados JSON:    top {total_metadados} (MAX_VIDEOS_METADADOS={MAX_VIDEOS_METADADOS})")
 
     for p in ["videos", "transcricoes", "thumbnails", "comentarios", "frames", "titulos", "metadados"]:
         os.makedirs(os.path.join(pasta_canal, p), exist_ok=True)
@@ -428,14 +498,17 @@ def executar_extracao_web(url_canal, opcoes):
             f.write(f"{i}. {t}\n   URL: {u}\n   Views: {vw}\n\n")
     logger.info(f"{total_todos} títulos salvos em '{arq_tit}'")
 
+    # PATCH 1 - indice canonico (custo zero, sem requisicoes extras)
+    salvar_indice_json(pasta_canal, videos_todos, info)
+
     # Executar etapas selecionadas
     erros = []
-    if "thumb" in opcoes:  etapa_thumbnails(videos_todos, pasta_canal, total_todos)            # TODOS
-    if "video" in opcoes:  erros += etapa_videos(videos_top, pasta_canal, total_top)           # TOP N
-    if "trans" in opcoes:  erros += etapa_transcricoes(videos_todos, pasta_canal, total_todos) # TODOS
-    if "coment" in opcoes: erros += etapa_comentarios(videos_top, pasta_canal, total_top)      # TOP N
-    if "meta" in opcoes:   etapa_metadados(videos_top, pasta_canal, total_top)                 # TOP N
-    if "frames" in opcoes: etapa_frames(videos_todos, pasta_canal)                             # top 2 por views (interno)
+    if "thumb" in opcoes:  etapa_thumbnails(videos_todos, pasta_canal, total_todos)                      # TODOS
+    if "video" in opcoes:  erros += etapa_videos(videos_download, pasta_canal, total_download)           # TOP MAX_VIDEOS_DOWNLOAD
+    if "trans" in opcoes:  erros += etapa_transcricoes(videos_todos, pasta_canal, total_todos)           # TODOS
+    if "coment" in opcoes: erros += etapa_comentarios(videos_comentarios, pasta_canal, total_comentarios) # TOP MAX_VIDEOS_COMENTARIOS
+    if "meta" in opcoes:   etapa_metadados(videos_metadados, pasta_canal, total_metadados)               # TOP MAX_VIDEOS_METADADOS
+    if "frames" in opcoes: etapa_frames(videos_todos, pasta_canal)                                       # top 2 por views (interno)
 
     # Resumo
     duracao = time.time() - inicio
@@ -445,12 +518,12 @@ def executar_extracao_web(url_canal, opcoes):
     logger.info("RESUMO FINAL")
     logger.info("=" * 60)
     logger.info(f"  Canal:         {nome_canal}")
-    logger.info(f"  Total vídeos:  {total_todos} (encontrados) | {total_top} (para download)")
+    logger.info(f"  Total vídeos:  {total_todos} encontrados")
     if "thumb" in opcoes:  logger.info(f"  Thumbnails:    {contar('thumbnails', 'jpg')} baixadas (de {total_todos})")
-    if "video" in opcoes:  logger.info(f"  Vídeos:        {contar('videos')} baixados (de {total_top})")
+    if "video" in opcoes:  logger.info(f"  Vídeos:        {contar('videos')} baixados (de {total_download})")
     if "trans" in opcoes:  logger.info(f"  Transcrições:  {contar('transcricoes', 'txt')} salvas (de {total_todos})")
-    if "coment" in opcoes: logger.info(f"  Comentários:   {contar('comentarios', 'txt')} salvos (de {total_top})")
-    if "meta" in opcoes:   logger.info(f"  Metadados:     {contar('metadados', 'json')} JSONs salvos (de {total_top})")
+    if "coment" in opcoes: logger.info(f"  Comentários:   {contar('comentarios', 'txt')} salvos (de {total_comentarios})")
+    if "meta" in opcoes:   logger.info(f"  Metadados:     {contar('metadados', 'json')} JSONs salvos (de {total_metadados})")
     if "frames" in opcoes: logger.info(f"  Frames:        Top 2 processados")
     logger.info(f"  Tempo total:   {m}min {s}s")
     logger.info(f"  📁 Pasta: {pasta_canal}")
