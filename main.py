@@ -358,6 +358,71 @@ def etapa_metadados(videos, pasta_canal, total):
         logger.info(f"  └─ Concluído.")
 
 
+def enriquecer_titulos_com_metadados(pasta_canal, videos_todos):
+    """Lê os JSONs de metadados já baixados e atualiza todos_os_videos.txt
+    e indice.json com as views reais (que o extract_flat não retorna)."""
+    pasta_meta = os.path.join(pasta_canal, "metadados")
+    if not os.path.isdir(pasta_meta):
+        return
+
+    # Monta dicionário titulo_arquivo -> view_count a partir dos JSONs
+    views_map = {}
+    for caminho_json in glob.glob(os.path.join(pasta_meta, "*.json")):
+        try:
+            with open(caminho_json, "r", encoding="utf-8") as f:
+                dados = json.load(f)
+            vc = dados.get("view_count")
+            if vc is None:
+                continue
+            # chave = nome do arquivo sem extensão (mesmo padrão usado ao salvar)
+            chave = os.path.splitext(os.path.basename(caminho_json))[0]
+            views_map[chave] = vc
+        except Exception:
+            continue
+
+    if not views_map:
+        logger.debug("[enriquecer] Nenhum view_count encontrado nos JSONs.")
+        return
+
+    # Enriquece a lista in-place para reuso no indice.json
+    atualizados = 0
+    for v in videos_todos:
+        chave = limpar_nome(v.get("title") or "")
+        if chave in views_map and v.get("view_count") is None:
+            v["view_count"] = views_map[chave]
+            atualizados += 1
+
+    # Regrava todos_os_videos.txt
+    arq_tit = os.path.join(pasta_canal, "titulos", "todos_os_videos.txt")
+    try:
+        with open(arq_tit, "w", encoding="utf-8") as f:
+            for i, v in enumerate(videos_todos, 1):
+                t = v.get("title") or f"Video_{i}"
+                u = obter_url_video(v)
+                vw = v.get("view_count", "N/A")
+                f.write(f"{i}. {t}\n   URL: {u}\n   Views: {vw}\n\n")
+        logger.info(f"[enriquecer] todos_os_videos.txt atualizado ({atualizados} views preenchidas).")
+    except Exception as e:
+        logger.warning(f"[enriquecer] Erro ao regravar títulos: {e}")
+        return
+
+    # Regrava indice.json com as views atualizadas
+    try:
+        caminho_idx = os.path.join(pasta_canal, "titulos", "indice.json")
+        if os.path.exists(caminho_idx):
+            with open(caminho_idx, "r", encoding="utf-8") as f:
+                idx = json.load(f)
+            for item in idx.get("videos", []):
+                chave = item.get("titulo_arquivo") or ""
+                if chave in views_map:
+                    item["view_count"] = views_map[chave]
+            with open(caminho_idx, "w", encoding="utf-8") as f:
+                json.dump(idx, f, ensure_ascii=False, indent=2, default=str)
+            logger.info(f"[enriquecer] indice.json atualizado com views reais.")
+    except Exception as e:
+        logger.warning(f"[enriquecer] Erro ao regravar indice.json: {e}")
+
+
 def etapa_frames(videos, pasta_canal):
     logger.info("\n" + "-" * 60)
     logger.info("[ETAPA] Extraindo frames dos 2 vídeos mais vistos...")
@@ -508,6 +573,7 @@ def executar_extracao_web(url_canal, opcoes):
     if "trans" in opcoes:  erros += etapa_transcricoes(videos_todos, pasta_canal, total_todos)           # TODOS
     if "coment" in opcoes: erros += etapa_comentarios(videos_comentarios, pasta_canal, total_comentarios) # TOP MAX_VIDEOS_COMENTARIOS
     if "meta" in opcoes:   etapa_metadados(videos_metadados, pasta_canal, total_metadados)               # TOP MAX_VIDEOS_METADADOS
+    if "meta" in opcoes:   enriquecer_titulos_com_metadados(pasta_canal, videos_todos)                   # preenche views no txt/indice
     if "frames" in opcoes: etapa_frames(videos_todos, pasta_canal)                                       # top 2 por views (interno)
 
     # Resumo
