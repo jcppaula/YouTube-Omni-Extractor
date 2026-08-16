@@ -46,8 +46,17 @@ python -m venv .venv
 # 3. Instale as dependências
 pip install -r requirements.txt
 
-# 4. (Opcional) Whisper para transcrição sem legenda
+# 4. Configure o ambiente
+copy .env.example .env
+# Edite o .env conforme necessário (veja a seção Configuração abaixo)
+
+# 5. Coloque seu cookies.txt na raiz do projeto (veja seção Cookies acima)
+
+# 6. (Opcional) Whisper para transcrição sem legenda
 pip install openai-whisper
+
+# 7. (Recomendado) Deno — necessario para o yt-dlp buscar views e outros dados completos
+irm https://deno.land/install.ps1 | iex
 ```
 
 Certifique-se de que o `ffmpeg` está no PATH:
@@ -132,7 +141,13 @@ Baixa arquivos de vídeo até 720p. O tempo de execução cresce muito com `MAX_
 
 ## Configuração (.env)
 
-Crie ou edite o arquivo `.env` na raiz do projeto para ajustar os limites sem alterar o código.
+O projeto usa um arquivo `.env` para controlar limites e tempos de espera. O repositório inclui um arquivo `.env.example` com todos os valores comentados. Para configurar:
+
+```powershell
+copy .env.example .env
+```
+
+Depois abra o `.env` em qualquer editor de texto e ajuste os valores. O arquivo nunca é commitado (está no `.gitignore`).
 
 | Variável | Default | O que faz | Impacto de aumentar |
 |---|---|---|---|
