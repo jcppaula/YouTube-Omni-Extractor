@@ -1,12 +1,14 @@
 .venv/
 __pycache__/
+
+# Arquivos de vídeo / temporários do yt-dlp
 *.mp4
 *.mkv
 *.webm
 *.part
 *.ytdl
-*.jpg
 *.vtt
+
 # Arquivos de sessão e sensíveis (NUNCA SUBIR)
 cookies.txt
 cookies_runtime.txt
@@ -16,5 +18,14 @@ cookies_runtime.txt
 *.log
 whisper_install_log.txt
 
-# Pastas de saída (canais processados)
-*/
+# Pastas de saída geradas pelo extrator (dados dos canais)
+# Padrão: qualquer pasta que contenha as subpastas típicas de extração
+*/videos/
+*/transcricoes/
+*/thumbnails/
+*/comentarios/
+*/metadados/
+*/frames/
+*/titulos/
+# Ignora também ficheiros .jpg dentro das pastas de canal (thumbnails avulsos)
+# sem bloquear imagens do código-fonte (ex.: static/)
