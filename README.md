@@ -34,6 +34,16 @@ Ambos já estão listados no `.gitignore` do projeto. Verifique antes de fazer q
 
 ## Instalação
 
+### Opção rápida: setup.bat
+
+Dê duplo clique no `setup.bat` na raiz do projeto. Ele faz tudo automaticamente:
+- Cria o ambiente virtual Python
+- Instala as dependências do `requirements.txt`
+- Instala o Deno (runtime JS obrigatório para o yt-dlp)
+- Cria o `.env` a partir do `.env.example`
+
+### Instalação manual (passo a passo)
+
 ```powershell
 # 1. Clone e entre na pasta
 git clone <url-do-repo>
@@ -43,7 +53,7 @@ cd Extrator_YouTube
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 
-# 3. Instale as dependências
+# 3. Instale as dependências Python
 pip install -r requirements.txt
 
 # 4. Configure o ambiente
@@ -52,17 +62,26 @@ copy .env.example .env
 
 # 5. Coloque seu cookies.txt na raiz do projeto (veja seção Cookies acima)
 
-# 6. (Opcional) Whisper para transcrição sem legenda
-pip install openai-whisper
+# 6. Instale o FFmpeg e adicione ao PATH
+# Download: https://ffmpeg.org/download.html
 
-# 7. (Recomendado) Deno — necessario para o yt-dlp buscar views e outros dados completos
+# 7. Instale o Deno (OBRIGATORIO)
 irm https://deno.land/install.ps1 | iex
+
+# 8. (Opcional) Whisper para transcrição sem legenda
+pip install openai-whisper
 ```
 
-Certifique-se de que o `ffmpeg` está no PATH:
+> **Por que o Deno não está no requirements.txt?**
+> O `requirements.txt` é exclusivo para pacotes Python instalados via `pip`.
+> O Deno é um runtime independente do sistema operacional, assim como o FFmpeg.
+> Os dois precisam ser instalados separadamente.
+
+Certifique-se de que o `ffmpeg` e o `deno` estão no PATH:
 
 ```powershell
 ffmpeg -version
+deno --version
 ```
 
 ---
