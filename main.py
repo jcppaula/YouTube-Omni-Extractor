@@ -45,8 +45,29 @@ def delay_seguro(ctx="requisição"):
 def limpar_nome(nome):
     if not nome or not isinstance(nome, str):
         return ""
-    nome = re.sub(r'[\\/*?:"<>|]', "", nome).strip()
+    nome = re.sub(r'[\\/*?"<>|]', "", nome).strip()
     return nome[:150] if len(nome) > 150 else nome
+
+
+def nome_arquivo(v, i=None):
+    """Gera o nome de arquivo para o video.
+
+    Formato preferido: '{video_id}_{titulo}' — garante unicidade mesmo quando
+    dois videos tem titulo identico ou muito semelhante apos truncamento.
+    Fallback sem id: '{titulo}' (comportamento anterior).
+    """
+    fallback = f"Video_{i}" if i is not None else "Video"
+    titulo = limpar_nome(v.get("title") or fallback)
+    vid = v.get("id") or ""
+    if not vid:
+        url = v.get("url") or v.get("webpage_url") or ""
+        m = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
+        if m:
+            vid = m.group(1)
+    if vid:
+        # Limita o titulo para nao ultrapassar limites do sistema de arquivos
+        return f"{vid}_{titulo[:130]}"
+    return titulo
 
 def preparar_cookies():
     if not os.path.exists(COOKIE_SOURCE): return
@@ -187,7 +208,7 @@ def salvar_indice_json(pasta_canal, videos, info_canal):
             "ordem": i,
             "id": vid,
             "titulo": titulo_original,
-            "titulo_arquivo": limpar_nome(titulo_original),
+            "titulo_arquivo": nome_arquivo(v, i),
             "url": url,
             "view_count": v.get("view_count"),
             "duration": v.get("duration"),
@@ -218,19 +239,20 @@ def etapa_thumbnails(videos, pasta_canal, total):
     logger.info("[ETAPA] Baixando thumbnails...")
     logger.info("-" * 60)
     for i, v in enumerate(videos, 1):
-        titulo = limpar_nome((v.get("title") or f"Video_{i}"))
+        arq = nome_arquivo(v, i)
+        titulo_display = limpar_nome(v.get("title") or f"Video_{i}")
         v_id = v.get("id", "")
         if not v_id:
             match = re.search(r"(?:v=|/)([a-zA-Z0-9_-]{11})", v.get("url", "") or v.get("webpage_url", ""))
             if match: v_id = match.group(1)
         if v_id:
-            destino = os.path.join(pasta_canal, "thumbnails", f"{titulo}.jpg")
+            destino = os.path.join(pasta_canal, "thumbnails", f"{arq}.jpg")
             if not os.path.exists(destino):
                 ok = baixar_thumb(v_id, destino)
                 status = "OK" if ok else "FALHA"
             else: status = "JÁ EXISTE"
         else: status = "SEM ID"
-        logger.info(f"  [{i}/{total}] {status} - {titulo[:60]}")
+        logger.info(f"  [{i}/{total}] {status} - {titulo_display[:60]}")
 
 
 def etapa_videos(videos, pasta_canal, total):
@@ -239,11 +261,12 @@ def etapa_videos(videos, pasta_canal, total):
     logger.info("-" * 60)
     erros = []
     for i, v in enumerate(videos, 1):
-        titulo = limpar_nome((v.get("title") or f"Video_{i}"))
+        arq = nome_arquivo(v, i)
+        titulo_display = limpar_nome(v.get("title") or f"Video_{i}")
         url_video = obter_url_video(v)
-        logger.info(f"\n  ┌─ [{i}/{total}] {titulo[:70]}")
-        caminho_base = os.path.join(pasta_canal, "videos", titulo)
-        existentes = [e for e in glob.glob(os.path.join(pasta_canal, "videos", f"{titulo}.*")) if not e.endswith(".part")]
+        logger.info(f"\n  ┌─ [{i}/{total}] {titulo_display[:70]}")
+        caminho_base = os.path.join(pasta_canal, "videos", arq)
+        existentes = [e for e in glob.glob(os.path.join(pasta_canal, "videos", f"{arq}.*")) if not e.endswith(".part")]
         if existentes:
             logger.info("  └─ [Vídeo] Já baixado.")
             continue
@@ -257,9 +280,9 @@ def etapa_videos(videos, pasta_canal, total):
             with yt_dlp.YoutubeDL(opts) as ydl:
                 vi = ydl.extract_info(url_video, download=True)
                 if vi: logger.info("  └─ [Vídeo] Baixado com sucesso.")
-                else: logger.warning("  └─ [Vídeo] FALHA."); erros.append(titulo)
+                else: logger.warning("  └─ [Vídeo] FALHA."); erros.append(arq)
         except Exception as e:
-            logger.error(f"  └─ [Vídeo] ERRO: {e}"); erros.append(titulo)
+            logger.error(f"  └─ [Vídeo] ERRO: {e}"); erros.append(arq)
     return erros
 
 
@@ -270,10 +293,10 @@ def etapa_transcricoes(videos, pasta_canal, total):
     erros = []
     for i, v in enumerate(videos, 1):
         titulo_original = (v.get("title") or f"Video_{i}")
-        titulo = limpar_nome(titulo_original)
+        arq = nome_arquivo(v, i)
         url_video = obter_url_video(v)
-        logger.info(f"\n  ┌─ [{i}/{total}] {titulo[:70]}")
-        caminho_txt = os.path.join(pasta_canal, "transcricoes", f"{titulo}.txt")
+        logger.info(f"\n  ┌─ [{i}/{total}] {titulo_original[:70]}")
+        caminho_txt = os.path.join(pasta_canal, "transcricoes", f"{arq}.txt")
         if os.path.exists(caminho_txt):
             logger.info("  └─ [Transcrição] Já existe."); continue
         delay_seguro("busca de legendas")
@@ -281,31 +304,31 @@ def etapa_transcricoes(videos, pasta_canal, total):
         os.makedirs(pasta_temp, exist_ok=True)
         opts = {"skip_download": True, "writesubtitles": True, "writeautomaticsub": True,
                 "subtitleslangs": ["pt", "en", "pt-BR"], "subtitlesformat": "vtt",
-                "outtmpl": os.path.join(pasta_temp, titulo) + ".%(ext)s",
+                "outtmpl": os.path.join(pasta_temp, arq) + ".%(ext)s",
                 "quiet": True, "ignoreerrors": True, "paths": {"home": BASE_DIR}}
         adicionar_extras_ydl(opts)
         texto = ""
         try:
             preparar_cookies()
             with yt_dlp.YoutubeDL(opts) as ydl: ydl.extract_info(url_video, download=True)
-            for vtt in glob.glob(os.path.join(pasta_temp, f"{titulo}*.vtt")):
+            for vtt in glob.glob(os.path.join(pasta_temp, f"{arq}*.vtt")):
                 txt = limpar_vtt_para_txt(vtt)
                 if txt: texto = txt; break
         except Exception as e: logger.debug(f"Erro legendas: {e}")
         try: shutil.rmtree(pasta_temp, ignore_errors=True)
         except Exception: pass
-        # Whisper fallback
+        # Whisper fallback — procura o video pelo nome de arquivo canonico
         if not texto and WHISPER_DISPONIVEL:
-            arqs = [e for e in glob.glob(os.path.join(pasta_canal, "videos", f"{titulo}.*")) if not e.endswith(".part")]
-            if arqs:
+            arqs_vid = [e for e in glob.glob(os.path.join(pasta_canal, "videos", f"{arq}.*")) if not e.endswith(".part")]
+            if arqs_vid:
                 logger.info("  │  Legendas indisponíveis. Usando Whisper...")
-                texto = transcrever_com_whisper(arqs[0]) or ""
+                texto = transcrever_com_whisper(arqs_vid[0]) or ""
         if texto:
             with open(caminho_txt, "w", encoding="utf-8") as f:
                 f.write(f"Título: {titulo_original}\nURL: {url_video}\n{'─'*50}\n\n{texto}")
             logger.info("  └─ [Transcrição] Salva.")
         else:
-            logger.warning("  └─ [Transcrição] Não disponível."); erros.append(titulo)
+            logger.warning("  └─ [Transcrição] Não disponível."); erros.append(arq)
     return erros
 
 
@@ -316,16 +339,16 @@ def etapa_comentarios(videos, pasta_canal, total):
     erros = []
     for i, v in enumerate(videos, 1):
         titulo_original = (v.get("title") or f"Video_{i}")
-        titulo = limpar_nome(titulo_original)
+        arq = nome_arquivo(v, i)
         url_video = obter_url_video(v)
-        logger.info(f"\n  ┌─ [{i}/{total}] {titulo[:70]}")
-        caminho = os.path.join(pasta_canal, "comentarios", f"{titulo}.txt")
+        logger.info(f"\n  ┌─ [{i}/{total}] {titulo_original[:70]}")
+        caminho = os.path.join(pasta_canal, "comentarios", f"{arq}.txt")
         if os.path.exists(caminho):
             logger.info("  └─ [Comentários] Já existem."); continue
         delay_seguro("busca de comentários")
         opts = {"skip_download": True, "getcomments": True,
                 "extractor_args": {"youtube": {"max_comments": [str(MAX_COMENTARIOS)], "comment_sort": ["top"]}},
-                "outtmpl": os.path.join(pasta_canal, "comentarios", f"_temp_{titulo}.%(ext)s"),
+                "outtmpl": os.path.join(pasta_canal, "comentarios", f"_temp_{arq}.%(ext)s"),
                 "quiet": True, "ignoreerrors": True, "paths": {"home": BASE_DIR}}
         adicionar_extras_ydl(opts)
         try:
@@ -342,7 +365,7 @@ def etapa_comentarios(videos, pasta_canal, total):
                         if texto: f.write(f"{ci}. [{autor}] (❤ {likes})\n   {texto}\n\n")
                 logger.info(f"  └─ [Comentários] {len(comms)} salvos.")
             else: logger.warning("  └─ [Comentários] Nenhum encontrado.")
-        except Exception as e: logger.error(f"  └─ [Comentários] Erro: {e}"); erros.append(titulo)
+        except Exception as e: logger.error(f"  └─ [Comentários] Erro: {e}"); erros.append(arq)
     return erros
 
 
@@ -351,10 +374,11 @@ def etapa_metadados(videos, pasta_canal, total):
     logger.info("[ETAPA] Extraindo metadados completos (JSON)...")
     logger.info("-" * 60)
     for i, v in enumerate(videos, 1):
-        titulo = limpar_nome((v.get("title") or f"Video_{i}"))
+        arq = nome_arquivo(v, i)
+        titulo_display = limpar_nome(v.get("title") or f"Video_{i}")
         url_video = obter_url_video(v)
-        logger.info(f"\n  ┌─ [{i}/{total}] {titulo[:70]}")
-        salvar_metadados_completos(pasta_canal, url_video, i, titulo)
+        logger.info(f"\n  ┌─ [{i}/{total}] {titulo_display[:70]}")
+        salvar_metadados_completos(pasta_canal, url_video, i, arq)
         logger.info(f"  └─ Concluído.")
 
 
@@ -365,7 +389,10 @@ def enriquecer_titulos_com_metadados(pasta_canal, videos_todos):
     if not os.path.isdir(pasta_meta):
         return
 
-    # Monta dicionário titulo_arquivo -> view_count a partir dos JSONs
+    # Monta dicionário titulo_arquivo -> view_count a partir dos JSONs.
+    # A chave e o nome do arquivo sem extensao — agora no formato '{id}_{titulo}',
+    # que e exatamente o que nome_arquivo() gera e o que indice.json armazena
+    # em titulo_arquivo. Sem dependencia do titulo puro, sem colisao.
     views_map = {}
     for caminho_json in glob.glob(os.path.join(pasta_meta, "*.json")):
         try:
@@ -374,7 +401,6 @@ def enriquecer_titulos_com_metadados(pasta_canal, videos_todos):
             vc = dados.get("view_count")
             if vc is None:
                 continue
-            # chave = nome do arquivo sem extensão (mesmo padrão usado ao salvar)
             chave = os.path.splitext(os.path.basename(caminho_json))[0]
             views_map[chave] = vc
         except Exception:
@@ -384,12 +410,24 @@ def enriquecer_titulos_com_metadados(pasta_canal, videos_todos):
         logger.debug("[enriquecer] Nenhum view_count encontrado nos JSONs.")
         return
 
-    # Enriquece a lista in-place para reuso no indice.json
+    # Enriquece a lista in-place usando o video_id como chave primaria,
+    # que aparece no prefixo do nome de arquivo ({id}_{titulo}).
     atualizados = 0
     for v in videos_todos:
-        chave = limpar_nome(v.get("title") or "")
-        if chave in views_map and v.get("view_count") is None:
-            v["view_count"] = views_map[chave]
+        vid = v.get("id") or ""
+        if not vid:
+            url = v.get("url") or v.get("webpage_url") or ""
+            m = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", url)
+            if m: vid = m.group(1)
+        # Procura qualquer chave cujo prefixo bate com o video_id
+        vc_encontrado = None
+        if vid:
+            for chave, vc in views_map.items():
+                if chave.startswith(vid):
+                    vc_encontrado = vc
+                    break
+        if vc_encontrado is not None and v.get("view_count") is None:
+            v["view_count"] = vc_encontrado
             atualizados += 1
 
     # Regrava todos_os_videos.txt
@@ -431,16 +469,17 @@ def etapa_frames(videos, pasta_canal):
     if vids: top2 = sorted(vids, key=lambda x: x.get("view_count", 0), reverse=True)[:2]
     else: logger.warning("Sem views, usando 2 primeiros."); top2 = videos[:2]
     for rank, v in enumerate(top2, 1):
-        titulo = limpar_nome((v.get("title") or f"Top_{rank}"))
+        arq = nome_arquivo(v, rank)
+        titulo_display = limpar_nome(v.get("title") or f"Top_{rank}")
         url_video = obter_url_video(v)
         views = v.get("view_count", "N/A")
-        logger.info(f"\n  Top {rank}: {titulo[:60]} ({views} views)")
-        pasta_f = os.path.join(pasta_canal, "frames", f"Top{rank}_{titulo[:80]}")
+        logger.info(f"\n  Top {rank}: {titulo_display[:60]} ({views} views)")
+        pasta_f = os.path.join(pasta_canal, "frames", f"Top{rank}_{arq[:80]}")
         os.makedirs(pasta_f, exist_ok=True)
-        if glob.glob(os.path.join(pasta_f, f"{titulo}_frame_*.jpg")):
+        if glob.glob(os.path.join(pasta_f, f"{arq}_frame_*.jpg")):
             logger.info(f"  [Frames] Já existem."); continue
         video_baixado = None
-        for e in glob.glob(os.path.join(pasta_canal, "videos", f"{titulo}.*")):
+        for e in glob.glob(os.path.join(pasta_canal, "videos", f"{arq}.*")):
             if not e.endswith(".part") and not e.endswith(".txt"): video_baixado = e; break
         if not video_baixado or not os.path.exists(video_baixado):
             delay_seguro("download de vídeo para frames")
@@ -457,12 +496,12 @@ def etapa_frames(videos, pasta_canal):
         if not video_baixado or not os.path.exists(video_baixado):
             logger.error("  [Erro] Vídeo não encontrado."); continue
         try:
-            with open(os.path.join(pasta_f, f"{titulo}_info.txt"), "w", encoding="utf-8") as f:
-                f.write(f"Título: {v.get('title', titulo)}\nURL: {url_video}\nViews: {views}\n")
+            with open(os.path.join(pasta_f, f"{arq}_info.txt"), "w", encoding="utf-8") as f:
+                f.write(f"Título: {v.get('title', titulo_display)}\nURL: {url_video}\nViews: {views}\n")
             cmd = ["ffmpeg", "-y", "-i", video_baixado, "-vf", f"fps=1/{INTERVALO_FRAMES}",
-                   "-q:v", "2", os.path.join(pasta_f, f"{titulo}_frame_%04d.jpg")]
+                   "-q:v", "2", os.path.join(pasta_f, f"{arq}_frame_%04d.jpg")]
             subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            n = len(glob.glob(os.path.join(pasta_f, f"{titulo}_frame_*.jpg")))
+            n = len(glob.glob(os.path.join(pasta_f, f"{arq}_frame_*.jpg")))
             for tv in glob.glob(os.path.join(pasta_f, "_temp_video.*")):
                 try: os.remove(tv)
                 except OSError: pass
