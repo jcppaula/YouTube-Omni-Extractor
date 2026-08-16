@@ -34,54 +34,106 @@ Ambos já estão listados no `.gitignore` do projeto. Verifique antes de fazer q
 
 ## Instalação
 
-### Opção rápida: setup.bat
+Escolha uma das duas formas abaixo. O resultado final é idêntico.
 
-Dê duplo clique no `setup.bat` na raiz do projeto. Ele faz tudo automaticamente:
-- Cria o ambiente virtual Python
-- Instala as dependências do `requirements.txt`
-- Instala o Deno (runtime JS obrigatório para o yt-dlp)
-- Cria o `.env` a partir do `.env.example`
+---
 
-### Instalação manual (passo a passo)
+### Opção A — Automática (recomendado para Windows)
 
+**Pré-requisitos:** Python 3.8+ e Git instalados.
+
+1. Clone o repositório:
+   ```powershell
+   git clone <url-do-repo>
+   cd Extrator_YouTube
+   ```
+
+2. Dê duplo clique no arquivo **`setup.bat`** na pasta do projeto.
+
+   O script executa automaticamente:
+   - Cria o ambiente virtual `.venv`
+   - Instala todas as dependências Python via `pip install -r requirements.txt`
+   - Instala o **Deno** (runtime JavaScript obrigatório para o yt-dlp)
+   - Cria o arquivo `.env` a partir do `.env.example`
+
+3. Coloque seu **`cookies.txt`** na raiz do projeto (veja a seção Cookies acima).
+
+4. Instale o **FFmpeg** e adicione ao PATH: [ffmpeg.org/download.html](https://ffmpeg.org/download.html)
+
+5. (Opcional) Para transcrição com Whisper:
+   ```powershell
+   .venv\Scripts\Activate.ps1
+   pip install openai-whisper
+   ```
+
+6. Verifique se tudo está no PATH:
+   ```powershell
+   ffmpeg -version
+   deno --version
+   ```
+
+---
+
+### Opção B — Manual (passo a passo)
+
+**Pré-requisitos:** Python 3.8+, Git e PowerShell.
+
+**Passo 1 — Clone o repositório**
 ```powershell
-# 1. Clone e entre na pasta
 git clone <url-do-repo>
 cd Extrator_YouTube
+```
 
-# 2. Crie e ative o ambiente virtual
+**Passo 2 — Crie e ative o ambiente virtual Python**
+```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
+```
+> Se der erro de permissão, rode antes: `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`
 
-# 3. Instale as dependências Python
+**Passo 3 — Instale as dependências Python**
+```powershell
 pip install -r requirements.txt
+```
 
-# 4. Configure o ambiente
+**Passo 4 — Configure o arquivo .env**
+```powershell
 copy .env.example .env
-# Edite o .env conforme necessário (veja a seção Configuração abaixo)
+```
+Abra o `.env` em qualquer editor e ajuste os valores (veja a seção Configuração abaixo).
 
-# 5. Coloque seu cookies.txt na raiz do projeto (veja seção Cookies acima)
+**Passo 5 — Adicione o cookies.txt**
 
-# 6. Instale o FFmpeg e adicione ao PATH
-# Download: https://ffmpeg.org/download.html
+Coloque seu `cookies.txt` na raiz do projeto (veja a seção Cookies acima).
 
-# 7. Instale o Deno (OBRIGATORIO)
+**Passo 6 — Instale o FFmpeg**
+
+Baixe em [ffmpeg.org/download.html](https://ffmpeg.org/download.html), extraia e adicione a pasta `bin/` ao PATH do sistema.
+```powershell
+ffmpeg -version   # deve retornar a versão sem erro
+```
+
+**Passo 7 — Instale o Deno (obrigatório)**
+
+O Deno é o runtime JavaScript que o yt-dlp usa para extrair dados completos do YouTube (incluindo `view_count`). Sem ele, as views ficam como N/A e algumas extrações podem falhar.
+```powershell
 irm https://deno.land/install.ps1 | iex
-
-# 8. (Opcional) Whisper para transcrição sem legenda
-pip install openai-whisper
+```
+Feche e reabra o terminal, depois confirme:
+```powershell
+deno --version   # deve retornar algo como "deno 2.x.x"
 ```
 
 > **Por que o Deno não está no requirements.txt?**
 > O `requirements.txt` é exclusivo para pacotes Python instalados via `pip`.
-> O Deno é um runtime independente do sistema operacional, assim como o FFmpeg.
-> Os dois precisam ser instalados separadamente.
+> O Deno é um runtime de sistema operacional, assim como o FFmpeg — os dois
+> precisam ser instalados separadamente.
 
-Certifique-se de que o `ffmpeg` e o `deno` estão no PATH:
+**Passo 8 — (Opcional) Instale o Whisper**
 
+Necessário apenas para transcrição de vídeos sem legenda disponível.
 ```powershell
-ffmpeg -version
-deno --version
+pip install openai-whisper
 ```
 
 ---
